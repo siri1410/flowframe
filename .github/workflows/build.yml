@@ -1,0 +1,87 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: typecheck, build and test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - name: Generate the graphical fixtures
+        run: node tests/make-fixtures.mjs
+
+      # The terminal and text-bearing fixtures are drawn by the app itself,
+      # because rendering glyphs needs a font engine.
+      - name: Generate the terminal fixtures (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npx playwright test tests/make-terminal-fixture.spec.ts
+
+      - name: Generate the terminal fixtures
+        if: runner.os != 'Linux'
+        run: npx playwright test tests/make-terminal-fixture.spec.ts
+
+      # Electron needs a display server on Linux; the other runners have one.
+      - name: Run end-to-end tests (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npx playwright test tests/flow.spec.ts tests/terminal.spec.ts
+
+      - name: Run end-to-end tests
+        if: runner.os != 'Linux'
+        run: npx playwright test tests/flow.spec.ts tests/terminal.spec.ts
+
+  package:
+    name: package installers
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Build installer
+        run: npx electron-builder --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flowframe-${{ matrix.os }}
+          path: |
+            release/*.dmg
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: ignore

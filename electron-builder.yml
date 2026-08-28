@@ -1,0 +1,58 @@
+appId: com.siri1410.flowframe
+productName: FlowFrame
+copyright: Copyright © 2026 Sireesh Yarlagadda
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - out/**/*
+  - package.json
+
+# Tesseract runs in a forked Node process and loads its WebAssembly core from
+# disk, which does not work from inside an asar archive.
+asarUnpack:
+  - '**/node_modules/tesseract.js/**'
+  - '**/node_modules/tesseract.js-core/**'
+
+# The language data ships with the app so text capture works with no network.
+extraResources:
+  - from: resources/ocr
+    to: ocr
+    filter:
+      - '**/*'
+
+# FlowFrame writes only to the user's Documents folder, so nothing extra ships.
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  darkModeSupport: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+
+linux:
+  category: Development
+  # The .deb target needs a maintainer; the GitHub noreply address keeps a
+  # personal inbox out of a package that gets redistributed.
+  maintainer: Sireesh Yarlagadda <siri1410@users.noreply.github.com>
+  synopsis: Screenshots to wireframes and a connected user flow
+  description: >-
+    FlowFrame turns a pile of screenshots into editable wireframes and a
+    connected user flow, grouped by module and stored as plain files on your
+    own drive. It works offline and can talk to a local model.
+  target:
+    - AppImage
+    - deb

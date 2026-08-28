@@ -1,0 +1,18 @@
+node_modules/
+out/
+dist/
+release/
+.DS_Store
+*.log
+.env
+.env.*
+test-results/
+playwright-report/
+.vite/
+tsconfig.*.tsbuildinfo
+*.tsbuildinfo
+
+# Working notes for AI agents. Local only — they describe how to work on this
+# repo, not what it is, and they are not part of what ships.
+CLAUDE.md
+AGENTS.md

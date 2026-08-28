@@ -1,0 +1,51 @@
+{
+  "name": "flowframe",
+  "version": "1.0.0",
+  "description": "Turn a pile of screenshots into editable wireframes and a connected user flow. Runs offline on your machine.",
+  "main": "./out/main/index.js",
+  "author": {
+    "name": "Sireesh Yarlagadda",
+    "url": "https://github.com/siri1410"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/siri1410/flowframe",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/siri1410/flowframe.git"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "npm run typecheck && electron-vite build",
+    "start": "node scripts/start.mjs",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "playwright test",
+    "pack": "npm run build && electron-builder --dir",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.1",
+    "@fontsource/ibm-plex-sans": "^5.1.1",
+    "@fontsource/space-grotesk": "^5.1.1",
+    "@xyflow/react": "^12.3.6",
+    "lucide-react": "^0.522.0",
+    "tesseract.js": "^7.0.0",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
