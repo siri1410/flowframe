@@ -16,3 +16,9 @@ tsconfig.*.tsbuildinfo
 # repo, not what it is, and they are not part of what ships.
 CLAUDE.md
 AGENTS.md
+
+# Created by docker compose as the way screenshots get into the container.
+screenshots/
+
+# Test coverage
+coverage/
