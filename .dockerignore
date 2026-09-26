@@ -1,0 +1,12 @@
+# The image builds its own dependencies and bundle; sending the host's copies
+# would be slow and, for node_modules, wrong — Electron's binary is per platform.
+node_modules
+out
+release
+test-results
+playwright-report
+.git
+.github
+screenshots
+*.log
+.DS_Store
