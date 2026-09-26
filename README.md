@@ -29,6 +29,7 @@ No account, no upload, no server.
 - [Including or excluding the header and footer](#including-or-excluding-the-header-and-footer)
 - [The clickable prototype](#the-clickable-prototype)
 - [Install and run](#install-and-run)
+- [Run in Docker](#run-in-docker)
 - [The end-to-end user flow](#the-end-to-end-user-flow)
 - [The interface, panel by panel](#the-interface-panel-by-panel)
 - [Working with modules](#working-with-modules)
@@ -263,6 +264,50 @@ Linux box with no display — where it points you at `xvfb-run -a npm start`.
 The underlying steps are still there if you want them: `npm run dev` for hot reload,
 `npm run build` for a typecheck and bundle, `npm run preview` to run an existing bundle. To
 produce a real installer for your platform, see [Building installers](#building-installers).
+
+### If the launcher cannot install Electron
+
+Electron does not ship its browser inside the npm package — a step after `npm install`
+downloads it. On a locked-down network that download is the one thing likely to fail, and it
+leaves `node_modules` in place with nothing in it, which used to look like a mystery later on.
+The launcher now checks for the binary itself, fetches it again once if it is missing, and if it
+still cannot, says why: set `HTTPS_PROXY`, or point `ELECTRON_MIRROR` at a mirror you trust, or
+delete `node_modules` and start again.
+
+If none of that applies, run it in Docker instead — the image builds Electron inside itself.
+
+---
+
+## Run in Docker
+
+FlowFrame is a desktop app, so the image brings a desktop with it: a virtual display, a window
+manager and a VNC server published over HTTP. You open the app **in a browser**, which is what
+makes this work from a Windows or macOS host, where an X11 socket cannot simply be shared.
+
+```bash
+docker compose up --build
+```
+
+Then open **<http://localhost:6080/>**. That is the whole app — the same offline app, nothing
+leaving the container.
+
+| | |
+| --- | --- |
+| Your projects | a named volume, `flowframe-data`, mounted at `/data` |
+| Getting screenshots in | drop them in `./screenshots` on your machine; they appear in the app's file picker under `/screenshots` |
+| Getting exports out | save them to `/screenshots` and they land in that same folder |
+| Window size | `FLOWFRAME_SCREEN=1920x1200x24 docker compose up` |
+| Port | change the `6080:6080` mapping in `docker-compose.yml` |
+
+Two things to know. The container passes Chromium `--no-sandbox`, because a container has no user
+namespaces for Chromium's own sandbox to use — this is a container requirement and changes nothing
+about the app, whose renderer keeps `contextIsolation` and its content security policy either way.
+And **Show files** opens the folder inside the container, not on your machine, which is why the
+`/screenshots` mount is how things get in and out.
+
+On Windows, running the app natively with `start.cmd` is still the better experience if it works
+for you; WSLg is another route that needs nothing from this repo. Docker is the answer when the
+dependency install is the part that will not cooperate.
 
 ---
 

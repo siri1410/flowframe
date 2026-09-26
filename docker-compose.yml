@@ -1,0 +1,20 @@
+# Run FlowFrame in a browser: docker compose up --build → http://localhost:6080/
+services:
+  flowframe:
+    build:
+      context: .
+      target: run
+    image: flowframe:latest
+    ports:
+      - '6080:6080'
+    # Chromium needs more shared memory than Docker's 64MB default.
+    shm_size: 1gb
+    volumes:
+      # Projects, so they survive the container being rebuilt.
+      - flowframe-data:/data
+      # Drop screenshots in here on your machine and they appear in the app's
+      # file picker under /screenshots. Save your exports back here to keep them.
+      - ./screenshots:/screenshots
+
+volumes:
+  flowframe-data:

@@ -17,7 +17,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -72,6 +72,17 @@ function run(command, commandArgs, extraEnv = {}) {
   if (result.status !== 0) fail(`${command} ${commandArgs.join(' ')} failed.`)
 }
 
+/** Same, but a failure is something to recover from rather than to stop on. */
+function tryRun(command, commandArgs) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: IS_WINDOWS,
+    env: process.env
+  })
+  return !result.error && result.status === 0
+}
+
 /** The newest mtime under a directory, or 0 when it is not there. */
 function newestFile(dir, skip = new Set(['node_modules', '.git', 'out', 'dist', 'release'])) {
   if (!existsSync(dir)) return 0
@@ -111,9 +122,73 @@ if (headlessLinux && !process.env.FLOWFRAME_ALLOW_HEADLESS) {
 
 // ------------------------------------------------------------- dependencies
 
+const ELECTRON_DIR = path.join(ROOT, 'node_modules', 'electron')
+
+/**
+ * Where Electron's own binary is, or null when it is not there.
+ *
+ * Electron does not ship the browser in its npm package; a postinstall step
+ * downloads it. When that download is blocked — a proxy, a firewall, an install
+ * interrupted part way — `node_modules` exists but the binary does not, and
+ * every later step fails with something that never names the cause. `path.txt`
+ * is the marker the postinstall writes, relative to `dist`.
+ */
+function electronBinary() {
+  const marker = path.join(ELECTRON_DIR, 'path.txt')
+  if (!existsSync(marker)) return null
+  const relative = readFileSync(marker, 'utf8').trim()
+  if (!relative) return null
+  const binary = path.join(ELECTRON_DIR, 'dist', relative)
+  return existsSync(binary) ? binary : null
+}
+
+function install(reason) {
+  say(reason)
+  // `npm ci` is the deterministic one and matches what CI does, but it insists
+  // on a lockfile and on wiping node_modules first — so it is only right on a
+  // clean tree.
+  const clean = !existsSync(path.join(ROOT, 'node_modules'))
+  const lockfile = existsSync(path.join(ROOT, 'package-lock.json'))
+  run(NPM, [clean && lockfile ? 'ci' : 'install'])
+}
+
 if (!existsSync(path.join(ROOT, 'node_modules'))) {
-  say('Installing dependencies — this only happens once.')
-  run(NPM, ['install'])
+  install('Installing dependencies — this only happens once.')
+}
+
+// The presence of node_modules is not proof that the install finished. Check
+// the thing that actually has to be there, and repair it once before giving up.
+if (!electronBinary()) {
+  if (!existsSync(ELECTRON_DIR)) {
+    install('Dependencies look incomplete; installing them again.')
+  } else {
+    say('Electron has no binary — the download did not finish. Fetching it again.')
+    rmSync(path.join(ELECTRON_DIR, 'dist'), { recursive: true, force: true })
+    tryRun(NPM, ['rebuild', 'electron'])
+  }
+}
+
+if (!electronBinary()) {
+  fail(
+    'Electron could not be installed, so there is nothing to open.\n' +
+      '\n' +
+      '  Electron downloads its browser binary after npm install, and that\n' +
+      '  download did not finish. It is nearly always the network rather than\n' +
+      '  this project:\n' +
+      '\n' +
+      '  · Behind a proxy? Set it, then run this again.\n' +
+      '      Windows      set HTTPS_PROXY=http://host:port\n' +
+      '      macOS, Linux export HTTPS_PROXY=http://host:port\n' +
+      '\n' +
+      '  · Is github.com blocked? Electron takes a mirror. This one is a third\n' +
+      '    party, so use it only if you are content to trust it:\n' +
+      '      set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/\n' +
+      '\n' +
+      '  · Or start clean: delete node_modules and run this again.\n' +
+      '\n' +
+      '  There is also a container that needs none of this — see README, Run in\n' +
+      '  Docker.'
+  )
 }
 
 // ------------------------------------------------------------------ launch
@@ -133,6 +208,7 @@ if (dev) {
   const stale = existsSync(bundle) && newestFile(path.join(ROOT, 'src')) > statSync(bundle).mtimeMs
   const needsBuild = forceBuild || !existsSync(bundle) || stale
   if (checkOnly) {
+    say(`Electron is installed at ${path.relative(ROOT, electronBinary())}`)
     say(needsBuild ? 'Would build, then open the app.' : 'Bundle is current; would open the app.')
     process.exit(0)
   }
