@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Turn a pile of screenshots into editable wireframes and a connected user flow. Runs offline on your machine.",
   "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "author": {
     "name": "Sireesh Yarlagadda",
     "url": "https://github.com/siri1410"
