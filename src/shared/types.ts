@@ -281,8 +281,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   providers: {
     ollama: { id: 'ollama', baseUrl: 'http://localhost:11434', model: '', hasKey: false },
-    openai: { id: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', hasKey: false },
-    anthropic: { id: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5', hasKey: false }
+    // Left blank on purpose: model ids on OpenAI-shaped endpoints change too
+    // often to hard-code, so the first probe picks one that reads screenshots.
+    openai: { id: 'openai', baseUrl: 'https://api.openai.com/v1', model: '', hasKey: false },
+    anthropic: { id: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-opus-5-5', hasKey: false }
   }
 }
 
@@ -297,15 +299,25 @@ export interface ProviderStatus {
 
 /** Cloud model ids that read images. Used when the endpoint will not tell us. */
 export const VISION_MODEL_PATTERN =
-  /gpt-4o|gpt-4\.1|gpt-5|o[34]|claude-(?:3|4|5|opus|sonnet|haiku)|gemini|llava|bakllava|moondream|gemma3|gemma4|vision|-vl|minicpm|pixtral|internvl/i
+  /gpt-4o|gpt-4\.1|gpt-5|\bo[34]\b|claude|gemini|llava|bakllava|moondream|gemma3|gemma4|llama-?4|vision|[-.]?vl\b|qwen[\d.]*-?vl|minicpm-v|pixtral|internvl|mistral-small-?3\.[12]|mistral-medium|grok-(?:[2-9]-)?vision|grok-4|kimi-vl|glm-4(?:\.\d)?v/i
+
+/**
+ * Ids an OpenAI-shaped /models list returns that cannot hold a conversation at
+ * all — embeddings, speech, image generation, moderation. They are left out of
+ * the model picker so nobody can choose one and get a 404 on the first message.
+ */
+export const NON_CHAT_MODEL_PATTERN =
+  /embed|whisper|tts|transcribe|dall-e|gpt-image|image-|moderation|realtime|audio|davinci|babbage|search|similarity|rerank|sora/i
 
 export interface ChatRequest {
   requestId: string
   provider: ProviderId
   model: string
   messages: { role: 'user' | 'assistant' | 'system'; content: string }[]
-  /** Bare base64 PNG payloads (no data: prefix) sent alongside the last user message. */
+  /** Bare base64 PNG or JPEG payloads (no data: prefix) sent alongside the last user message. */
   images?: string[]
+  /** Ask the provider for a JSON object back, where it has a mode for that. */
+  json?: boolean
 }
 
 export interface ChatChunk {

@@ -527,6 +527,7 @@ Typical local models:
 | --- | --- | --- |
 | `gemma4` | **Yes** | Verified against this app. Good at describing a screen's structure. |
 | `llama3.2-vision` | **Yes** | The common alternative. `ollama pull llama3.2-vision` |
+| `qwen2.5vl`, `qwen3-vl`, `llama4`, `mistral-small3.2` | **Yes** | Newer families; read dense screens well. |
 | `llava`, `moondream`, `minicpm-v` | **Yes** | Smaller and faster, less precise. |
 | `llama3.1`, `llama2`, `mistral` | No | Fine for flow questions, cannot see an image. |
 
@@ -538,7 +539,21 @@ ollama serve                # if it is not already running
 ```
 
 Then open Settings, press **Re-check providers**, and pick it. FlowFrame selects a vision-capable
-model automatically the first time it finds one.
+model automatically the first time it finds one, for every provider. If the model you chose
+disappears later (deleted from Ollama, or retired by a cloud provider), FlowFrame says so and
+switches to another rather than failing every request with a 404.
+
+Cloud models are found the same way: the Anthropic models list says which Claude models take images,
+OpenRouter's says which of its models do, and other OpenAI-shaped endpoints are judged by model name.
+Embedding, speech and image-generation models are left out of the picker. Anthropic defaults to
+`claude-opus-5-5`.
+
+Reasoning models work too, local or cloud. Their thinking is not shown in the chat, and the naming
+pass ignores it when reading the model's JSON. A refusal, an error part way through an answer, or an
+answer cut off at the model's length limit is shown as such, never as an empty reply. An overloaded
+or rate-limited provider is retried twice before FlowFrame gives up. Screenshots sent to a model are
+scaled to 2048 px on the long edge and re-encoded as PNG or JPEG, so a BMP or a very large capture
+is not refused.
 
 ### Good questions to ask
 

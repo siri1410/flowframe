@@ -129,8 +129,13 @@ the pixels alone.
    write a project file directly.
 5. **Paths are checked.** `safeJoin` refuses anything that escapes the project
    folder. All asset paths come from the renderer, so they are untrusted input.
-6. **One reader child per batch.** Starting Tesseract costs far more than reading
-   a page. The child is shut down when a run finishes, not between screens.
+6. **One reader child, kept warm between runs.** Starting Tesseract costs far
+   more than reading a page. The child holds two engines, so a light screen's
+   normal and inverted passes read in parallel, and it shuts itself down after
+   90 seconds idle rather than at the end of every run. A request that times
+   out kills the child, because a wedged reader would time out everything
+   queued behind it; the next request starts a fresh one. A replaced child's
+   `exit` must never touch its successor's pending requests.
 
 ## Where the data lives
 
@@ -157,6 +162,7 @@ collaboration between processes.
 | --- | --- | --- |
 | `tests/flow.spec.ts` | The whole journey: modules, generation, preview, flow, paste, rearrange, export, reopen | Nothing |
 | `tests/terminal.spec.ts` | Mainframe detection, text capture, F-keys, table merging, capture-off fallback | Nothing |
+| `tests/providers.spec.ts` | The provider layer against a stand-in server: paged model lists, model re-pick, retry on overload, refusals, mid-stream errors, cut-off answers | Nothing |
 | `tests/ollama.spec.ts` | A live local model, including a vision question | Ollama running; skips itself otherwise |
 | `tests/screenshot.spec.ts` | Regenerates the README images | Nothing |
 | `tests/make-fixtures.mjs`, `tests/make-terminal-fixture.spec.ts` | Build the fixtures | Nothing |

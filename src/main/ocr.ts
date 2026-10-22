@@ -19,6 +19,18 @@ export interface OcrResult {
 
 const START_TIMEOUT_MS = 20_000
 const RECOGNISE_TIMEOUT_MS = 60_000
+/** An idle app holds no reader, but back-to-back runs should not each pay the start-up. */
+const IDLE_SHUTDOWN_MS = 90_000
+
+let idleTimer: NodeJS.Timeout | null = null
+
+function scheduleIdleShutdown(): void {
+  if (idleTimer) clearTimeout(idleTimer)
+  idleTimer = null
+  if (pending.size) return
+  idleTimer = setTimeout(() => void shutdown(), IDLE_SHUTDOWN_MS)
+  idleTimer.unref?.()
+}
 
 let child: ChildProcess | null = null
 let nextId = 1
@@ -76,6 +88,7 @@ function ensureChild(): ChildProcess {
       if (!entry) return
       pending.delete(message.id)
       clearTimeout(entry.timer)
+      scheduleIdleShutdown()
       if (message.ok && message.result) entry.resolve(message.result)
       else if (message.ok) entry.resolve({ text: '', words: [], confidence: 0 })
       else entry.reject(new Error(message.error ?? 'Text capture failed.'))
@@ -83,6 +96,10 @@ function ensureChild(): ChildProcess {
   )
 
   forked.on('exit', (code) => {
+    // A reader that was already replaced (stopped, or killed for hanging) had
+    // its requests failed when it was let go; the ones pending now belong to
+    // its successor and must not be failed by its exit.
+    if (child !== forked) return
     child = null
     const detail = stderr
       .replace(/\u001b\[[0-9;]*m/g, '')
@@ -99,6 +116,7 @@ function ensureChild(): ChildProcess {
   })
 
   forked.on('error', (error) => {
+    if (child !== forked) return
     child = null
     failAll(error.message)
   })
@@ -112,6 +130,8 @@ function ensureChild(): ChildProcess {
  * before sending, and divides the boxes that come back by the same factor.
  */
 export function recognize(base64: string): Promise<OcrResult> {
+  if (idleTimer) clearTimeout(idleTimer)
+  idleTimer = null
   const worker = ensureChild()
   const id = nextId++
 
@@ -121,6 +141,17 @@ export function recognize(base64: string): Promise<OcrResult> {
     const timer = setTimeout(() => {
       pending.delete(id)
       reject(new Error('Text capture timed out.'))
+      // A reader that has gone this long is wedged, and everything queued behind
+      // it would time out too. Kill it; the next request starts a fresh one.
+      if (child === worker) {
+        child = null
+        failAll('Text capture timed out.')
+        try {
+          worker.kill()
+        } catch {
+          // Already gone.
+        }
+      }
     }, budget)
 
     pending.set(id, { resolve, reject, timer })
@@ -128,8 +159,10 @@ export function recognize(base64: string): Promise<OcrResult> {
   })
 }
 
-/** Called once a generation run finishes, so an idle app holds no reader. */
+/** Lets the reader go. Runs on its own once the reader has been idle for a while. */
 export async function shutdown(): Promise<void> {
+  if (idleTimer) clearTimeout(idleTimer)
+  idleTimer = null
   const current = child
   child = null
   failAll('Text capture was stopped.')

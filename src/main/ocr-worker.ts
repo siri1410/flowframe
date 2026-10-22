@@ -1,4 +1,5 @@
-import { createWorker, PSM } from 'tesseract.js'
+import { availableParallelism } from 'node:os'
+import { createScheduler, createWorker, PSM } from 'tesseract.js'
 import type { OcrWord } from '../shared/types'
 
 /**
@@ -18,6 +19,13 @@ interface Request {
   shutdown?: boolean
 }
 
+/**
+ * Two engines, so a light screen's normal and inverted passes read at the same
+ * time instead of one after the other. More buys little: the renderer sends at
+ * most two pages at once, and each engine holds its own copy of the language data.
+ */
+const ENGINES = Math.max(1, Math.min(2, availableParallelism() - 1))
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let engine: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -29,18 +37,25 @@ async function getEngine(langPath: string): Promise<any> {
   if (starting) return starting
 
   starting = (async () => {
-    const created = await createWorker('eng', 1, {
-      langPath,
-      cachePath: langPath,
-      cacheMethod: 'none',
-      gzip: false,
-      logger: () => {}
-    })
-    // Page segmentation mode 6: one uniform block of text. Terminal screens and
-    // app screenshots are both closer to a block than to a scanned page.
-    await created.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK })
-    engine = created
-    return created
+    const scheduler = createScheduler()
+    const workers = await Promise.all(
+      Array.from({ length: ENGINES }, async () => {
+        const created = await createWorker('eng', 1, {
+          langPath,
+          cachePath: langPath,
+          cacheMethod: 'none',
+          gzip: false,
+          logger: () => {}
+        })
+        // Page segmentation mode 6: one uniform block of text. Terminal screens and
+        // app screenshots are both closer to a block than to a scanned page.
+        await created.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK })
+        return created
+      })
+    )
+    for (const worker of workers) scheduler.addWorker(worker)
+    engine = scheduler
+    return scheduler
   })()
 
   try {
@@ -64,8 +79,9 @@ process.on('message', (request: Request) => {
     }
 
     try {
-      const worker = await getEngine(request.langPath!)
-      const { data } = await worker.recognize(
+      const scheduler = await getEngine(request.langPath!)
+      const { data } = await scheduler.addJob(
+        'recognize',
         Buffer.from(request.base64!, 'base64'),
         {},
         { text: true, blocks: true }
