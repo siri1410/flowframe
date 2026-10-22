@@ -221,6 +221,9 @@ function pickModel(status: ProviderStatus): string | undefined {
   return pool[0]
 }
 
+/** Counts provider probes, so a probe that was overtaken by a newer one is dropped. */
+let probeSeq = 0
+
 /** Longest edge sent to a model. Larger only costs tokens and time; providers downscale anyway. */
 const MODEL_IMAGE_EDGE = 2048
 /** Stays under the 5 MB per-image limit the strictest provider sets, with room for base64. */
@@ -1122,7 +1125,12 @@ export const useStore = create<Store>((set, get) => ({
 
   // ------------------------------------------------------------------ ai
   refreshProviders: async () => {
+    // Probes overlap — one at boot, another after a settings change — and a slow
+    // one (a cloud endpoint timing out) can land after a newer one. Only the
+    // latest probe may write, or stale results replace current ones.
+    const seq = ++probeSeq
     const providers = await api.ai.probe()
+    if (seq !== probeSeq) return
     set({ providers })
 
     // Pick a model the first time a provider is seen, and pick again when the
