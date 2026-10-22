@@ -12,8 +12,7 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "isolatedModules": true,
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/renderer/src/*"] }
+    "paths": { "@/*": ["./src/renderer/src/*"] }
   },
   "include": ["src/shared/**/*.ts", "src/renderer/src/**/*.ts", "src/renderer/src/**/*.tsx", "src/preload/index.d.ts"]
 }
