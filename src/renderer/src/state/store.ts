@@ -184,18 +184,75 @@ interface NamingAnswer {
  * that cannot be trusted is simply not applied.
  */
 function parseNaming(text: string): NamingAnswer | null {
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start < 0 || end <= start) return null
-  try {
-    const raw = JSON.parse(text.slice(start, end + 1)) as Partial<NamingAnswer>
-    return {
-      screens: Array.isArray(raw.screens) ? raw.screens.filter((item) => item?.screenId) : [],
-      fields: Array.isArray(raw.fields) ? raw.fields.filter((item) => item?.screenId && item?.key) : []
+  // Reasoning models may think out loud before the answer, and some wrap the
+  // answer in a code fence; neither is part of the JSON.
+  const cleaned = text
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .replace(/```(?:json)?/gi, '')
+  const end = cleaned.lastIndexOf('}')
+  if (end < 0) return null
+  // Try each opening brace in turn: prose before the answer can hold braces too.
+  for (let start = cleaned.indexOf('{'); start >= 0 && start < end; start = cleaned.indexOf('{', start + 1)) {
+    try {
+      const raw = JSON.parse(cleaned.slice(start, end + 1)) as Partial<NamingAnswer>
+      if (!raw || typeof raw !== 'object') continue
+      return {
+        screens: Array.isArray(raw.screens) ? raw.screens.filter((item) => item?.screenId) : [],
+        fields: Array.isArray(raw.fields) ? raw.fields.filter((item) => item?.screenId && item?.key) : []
+      }
+    } catch {
+      // Not this brace; try the next.
     }
-  } catch {
-    return null
   }
+  return null
+}
+
+/**
+ * The model to fall back on for a provider. One that reads screenshots wins,
+ * and among those the everyday tiers come before the slow, expensive ones.
+ */
+function pickModel(status: ProviderStatus): string | undefined {
+  const pool = status.visionModels.length ? status.visionModels : status.models
+  const preferred = [/claude-opus-5-5/, /claude-sonnet-5-5/, /gpt-5[\w.-]*mini/, /gpt-5(?![\w.-]*nano)/, /gpt-4\.1/, /gpt-4o/]
+  for (const pattern of preferred) {
+    const hit = pool.find((model) => pattern.test(model))
+    if (hit) return hit
+  }
+  return pool[0]
+}
+
+/** Counts provider probes, so a probe that was overtaken by a newer one is dropped. */
+let probeSeq = 0
+
+/** Longest edge sent to a model. Larger only costs tokens and time; providers downscale anyway. */
+const MODEL_IMAGE_EDGE = 2048
+/** Stays under the 5 MB per-image limit the strictest provider sets, with room for base64. */
+const MODEL_IMAGE_BYTES = 3_500_000
+
+/**
+ * Re-encodes a screenshot for a model: scaled so its long edge fits, and always
+ * PNG or JPEG, because a BMP or a 6000-pixel capture is refused outright.
+ */
+async function imageForModel(url: string): Promise<string> {
+  const image = await loadImage(url)
+  const scale = Math.min(1, MODEL_IMAGE_EDGE / Math.max(image.naturalWidth, image.naturalHeight))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+  const context = canvas.getContext('2d')!
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  let data = canvas.toDataURL('image/png').split(',')[1]
+  // A photographic screen can still be large as PNG; JPEG reads just as well to a model.
+  if (data.length * 0.75 > MODEL_IMAGE_BYTES) data = canvas.toDataURL('image/jpeg', 0.88).split(',')[1]
+  return data
+}
+
+/** Electron prefixes an IPC rejection with the channel name; the user only needs the reason. */
+function ipcMessage(error: unknown, fallback: string): string {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  return raw.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') || fallback
 }
 
 function blobUrl(base64: string, type = 'image/png'): string {
@@ -260,9 +317,13 @@ export const useStore = create<Store>((set, get) => ({
     ])
     set({ info, settings, projects, ready: true })
 
-    if (projects.length) {
-      await get().openProject(projects[0].id)
-    } else {
+    // A damaged project must not stop the app from opening: fall through to the
+    // next most recent one, and only start a fresh project when none will open.
+    for (const summary of projects) {
+      await get().openProject(summary.id)
+      if (get().project?.id === summary.id) break
+    }
+    if (!get().project) {
       await get().createProject('My first flow')
     }
     void get().refreshProviders()
@@ -272,7 +333,13 @@ export const useStore = create<Store>((set, get) => ({
 
   openProject: async (id) => {
     await flushSave(get)
-    const project = await api.projects.open(id)
+    let project: Project
+    try {
+      project = await api.projects.open(id)
+    } catch (error) {
+      get().notify(ipcMessage(error, 'That project could not be opened.'), 'error')
+      return
+    }
 
     // Release the previous project's blob URLs before swapping them out.
     for (const url of Object.values(get().sourceUrls)) URL.revokeObjectURL(url)
@@ -629,15 +696,17 @@ export const useStore = create<Store>((set, get) => ({
                   h: word.h / scale
                 }))
 
-            const read = await api.ocr.recognize(prepared.ocrInput)
-            words = rescale(read.words)
-
             // A light screen with dark bars or buttons gets a second, inverted
             // pass; the words inside those blocks are invisible to the first.
-            if (prepared.ocrInputInverted) {
-              const inverted = await api.ocr.recognize(prepared.ocrInputInverted)
-              words = mergeWords(words, rescale(inverted.words))
-            }
+            // The reader runs two engines, so both passes go at once.
+            const [read, inverted] = await Promise.all([
+              api.ocr.recognize(prepared.ocrInput),
+              prepared.ocrInputInverted
+                ? api.ocr.recognize(prepared.ocrInputInverted).catch(() => null)
+                : Promise.resolve(null)
+            ])
+            words = rescale(read.words)
+            if (inverted) words = mergeWords(words, rescale(inverted.words))
           } catch {
             // Text capture failed; the wireframe is still worth drawing.
             words = []
@@ -670,8 +739,8 @@ export const useStore = create<Store>((set, get) => ({
       }
     }
 
-    // The reader holds a worker thread; let it go once the run is done.
-    void api.ocr.shutdown()
+    // The reader lets itself go after a minute or so idle (src/main/ocr.ts), so a
+    // second run straight after this one does not pay the start-up again.
 
     const withWireframes: Project = { ...project, wireframes }
     const flow = draftFlow(withWireframes)
@@ -797,6 +866,7 @@ export const useStore = create<Store>((set, get) => ({
         requestId: `name_${Math.random().toString(36).slice(2)}`,
         provider,
         model,
+        json: true,
         messages: [
           {
             role: 'system',
@@ -1055,25 +1125,38 @@ export const useStore = create<Store>((set, get) => ({
 
   // ------------------------------------------------------------------ ai
   refreshProviders: async () => {
+    // Probes overlap — one at boot, another after a settings change — and a slow
+    // one (a cloud endpoint timing out) can land after a newer one. Only the
+    // latest probe may write, or stale results replace current ones.
+    const seq = ++probeSeq
     const providers = await api.ai.probe()
+    if (seq !== probeSeq) return
     set({ providers })
 
-    // Pick a sensible default model the first time a provider is seen.
+    // Pick a model the first time a provider is seen, and pick again when the
+    // chosen one has gone — retired upstream, or deleted from Ollama — because
+    // otherwise every request from then on fails with a bare 404.
     const settings = get().settings
-    const ollama = providers.find((provider) => provider.id === 'ollama')
-    if (ollama?.reachable && !settings.providers.ollama.model && ollama.models.length) {
-      const next: AppSettings = {
-        ...settings,
-        providers: {
-          ...settings.providers,
-          ollama: {
-            ...settings.providers.ollama,
-            model: ollama.visionModels[0] ?? ollama.models[0]
-          }
+    let changed = false
+    const nextProviders = { ...settings.providers }
+    for (const status of providers) {
+      const config = settings.providers[status.id]
+      if (!status.reachable || !status.models.length) continue
+      if (config.model && status.models.includes(config.model)) continue
+      // Only Ollama and Anthropic list everything they serve. An OpenAI-shaped
+      // proxy often lists a subset, and the picker hides some chat models, so
+      // there a model missing from the list is no proof it has gone.
+      if (config.model && status.id === 'openai') continue
+      const model = pickModel(status)
+      if (model && model !== config.model) {
+        if (config.model) {
+          get().notify(`${config.model} is no longer offered, so FlowFrame switched to ${model}.`)
         }
+        nextProviders[status.id] = { ...config, model }
+        changed = true
       }
-      await get().saveSettings(next)
     }
+    if (changed) await get().saveSettings({ ...settings, providers: nextProviders })
   },
 
   saveSettings: async (next) => set({ settings: await api.settings.set(next) }),
@@ -1143,7 +1226,7 @@ export const useStore = create<Store>((set, get) => ({
       const screen = project.screens.find((item) => item.id === state.selectedScreenId)
       if (screen && canSee) {
         try {
-          images = [await api.assets.read(project.id, screen.file)]
+          images = [await imageForModel(get().sourceUrls[screen.id] ?? blobUrl(await api.assets.read(project.id, screen.file), mimeFor(screen.file)))]
         } catch {
           images = undefined
         }

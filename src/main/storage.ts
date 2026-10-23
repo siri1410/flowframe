@@ -55,11 +55,17 @@ async function ensureDir(dir: string): Promise<void> {
 }
 
 /** Write to a sibling temp file then rename, so a crash mid-save cannot shred a project. */
-async function writeAtomic(file: string, data: string | Buffer): Promise<void> {
+export async function writeAtomic(file: string, data: string | Buffer, mode?: number): Promise<void> {
   await ensureDir(path.dirname(file))
   const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`
-  await fs.writeFile(tmp, data)
-  await fs.rename(tmp, file)
+  try {
+    await fs.writeFile(tmp, data, mode === undefined ? undefined : { mode })
+    await fs.rename(tmp, file)
+  } catch (error) {
+    // A failed write must not leave its temp file behind in the project folder.
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw error
+  }
 }
 
 export async function initStorage(): Promise<void> {
@@ -72,11 +78,13 @@ export async function readSettings(): Promise<AppSettings> {
   try {
     const raw = await fs.readFile(settingsFile(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<AppSettings>
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      providers: { ...DEFAULT_SETTINGS.providers, ...(parsed.providers ?? {}) }
+    // Merge per provider, so a settings file written by an older build still
+    // picks up any field a provider has gained since.
+    const providers = structuredClone(DEFAULT_SETTINGS.providers)
+    for (const id of Object.keys(providers) as (keyof AppSettings['providers'])[]) {
+      providers[id] = { ...providers[id], ...(parsed.providers?.[id] ?? {}), id }
     }
+    return { ...DEFAULT_SETTINGS, ...parsed, providers }
   } catch {
     return structuredClone(DEFAULT_SETTINGS)
   }
@@ -131,8 +139,21 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 }
 
 export async function readProject(projectId: string): Promise<Project> {
-  const raw = await fs.readFile(path.join(projectDir(projectId), 'project.json'), 'utf8')
-  const project = JSON.parse(raw) as Project
+  const file = path.join(projectDir(projectId), 'project.json')
+  const raw = await fs.readFile(file, 'utf8')
+  let project: Project
+  try {
+    project = JSON.parse(raw) as Project
+  } catch {
+    // Never rewrite the file here: whatever is left of it is the user's to recover.
+    throw new Error(`This project's file is damaged and could not be read: ${file}`)
+  }
+  if (!project || typeof project !== 'object' || !project.id) {
+    throw new Error(`This project's file is not a FlowFrame project: ${file}`)
+  }
+  project.flow = project.flow ?? { nodes: [], edges: [] }
+  project.chat = Array.isArray(project.chat) ? project.chat : []
+  project.wireframes = project.wireframes ?? {}
   project.generate = { ...DEFAULT_GENERATE_SETTINGS, ...(project.generate ?? {}) }
 
   // Projects written before modules existed get one, and every loose screen joins it.
